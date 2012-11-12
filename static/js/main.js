@@ -1,7 +1,8 @@
 
 $(function() {
+    var last = null;
     function poll() {
-        var data = {"param": 2};
+        var data = {"last": last};
         console.log("try");
         $.ajax({
             url: "/poll",
@@ -11,13 +12,22 @@ $(function() {
             contentType: 'application/json',
         }).then(function(result) {
             console.log("got it", result);
-            $("<div>").text(result.res).appendTo($("#messages"));
+            last = result.last;
+            _.each(result.res, function(mes) {
+                $("<div>").text(mes).appendTo($("#messages"));
+            });
+            poll();
+        }, function() {
             poll();
         });
     }
     poll();
-    $("#send").click(function() {
+    $("#typing").keypress(function(e) {
+        if(e.which != 13) {
+            return;
+        }
         var mes = $("#typing").val();
+        $("#typing").val("");
         $.ajax({
             url: "/post",
             dataType: 'json',
@@ -27,5 +37,5 @@ $(function() {
         }).then(function(result) {
             console.log("pushed message");
         });
-    });
+    }).focus();
 });
