@@ -29,17 +29,20 @@ def poll():
     last = data["last"]
     while True:
         session = Session()
-        query = session.query(Message)
-        if last is not None:
-            query = query.filter(Message.id > last)
-        query = query.order_by(Message.id)
-        res = query.all()
-        lst = [x.message for x in res]
-        if len(lst) > 0:
-            plast = last
-            last = res[-1].id
-            if plast is not None:
-                return flask.jsonify({"res": lst, "last": last})
+        try:
+            query = session.query(Message)
+            if last is not None:
+                query = query.filter(Message.id > last)
+            query = query.order_by(Message.id)
+            res = query.all()
+            lst = [x.message for x in res]
+            if len(lst) > 0:
+                plast = last
+                last = res[-1].id
+                if plast is not None:
+                    return flask.jsonify({"res": lst, "last": last})
+        finally:
+            session.rollback()
         posted.wait()
         print "waking up"
 
@@ -47,30 +50,35 @@ def poll():
 def post():
     data = flask.request.json
     session = Session()
-    session.add(Message(message=data["message"]))
-    session.execute("notify received_message;")
-    session.commit()
+    try:
+        session.add(Message(message=data["message"]))
+        session.execute("notify received_message;")
+        session.commit()
+    finally:
+        session.rollback()
     return flask.jsonify({"res": None})
 
 def listener():
     while True:
         session = Session()
-        conn = session.connection().connection
-        import psycopg2.extensions
-        conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
-        c = conn.cursor()
-        c.execute("listen received_message;")
-        print "waiting"
-        if select.select([conn], [], [], 5) == ([],[],[]):
-            print "Timeout"
-        else:
-            conn.poll()
-            while conn.notifies:
-                notify = conn.notifies.pop()
-                print "Got NOTIFY:", notify.pid, notify.channel, notify.payload
-                posted.set()
-                posted.clear()
-        session.close()
+        try:
+            conn = session.connection().connection
+            import psycopg2.extensions
+            conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+            c = conn.cursor()
+            c.execute("listen received_message;")
+            print "waiting"
+            if select.select([conn], [], [], 5) == ([],[],[]):
+                print "Timeout"
+            else:
+                conn.poll()
+                while conn.notifies:
+                    notify = conn.notifies.pop()
+                    print "Got NOTIFY:", notify.pid, notify.channel, notify.payload
+                    posted.set()
+                    posted.clear()
+        finally:
+            session.rollback()
 
 class Message(pyphilo.Base):
     message = sa.Column(sa.String(200))
