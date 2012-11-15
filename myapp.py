@@ -6,12 +6,15 @@ import gevent.event
 import flask
 
 gevent.monkey.patch_all()
+import gevent_psycopg2; gevent_psycopg2.monkey_patch()
 
 import pyphilo
 import sqlalchemy as sa
 from sqlalchemy.orm import sessionmaker
 import select
+import time
 from flask import Flask
+
 app = Flask(__name__)
 app.debug = True
 
@@ -40,9 +43,12 @@ def poll():
                 plast = last
                 last = res[-1].id
                 if plast is not None:
+                    print "found", len(lst), "messages"
                     return flask.jsonify({"res": lst, "last": last})
+            else:
+                print "didn't found any message"
         finally:
-            session.rollback()
+            session.close()
         posted.wait()
         print "waking up"
 
@@ -52,7 +58,8 @@ def post():
     session = Session()
     try:
         session.add(Message(message=data["message"]))
-        session.execute("notify received_message;")
+        session.commit()
+        session.execute("notify received_message, '"+ data["message"] + "'")
         session.commit()
     finally:
         session.rollback()
@@ -60,25 +67,29 @@ def post():
 
 def listener():
     while True:
-        session = Session()
+        conn1 = pyphilo.engine.connect()
+        conn = conn1.connection
         try:
-            conn = session.connection().connection
             import psycopg2.extensions
-            conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
             c = conn.cursor()
             c.execute("listen received_message;")
+            conn.commit();
             print "waiting"
-            if select.select([conn], [], [], 5) == ([],[],[]):
+            if select.select([conn], [], [], 10) == ([],[],[]):
                 print "Timeout"
+                c.execute("unlisten received_message;")
+                conn.commit()
             else:
                 conn.poll()
                 while conn.notifies:
                     notify = conn.notifies.pop()
                     print "Got NOTIFY:", notify.pid, notify.channel, notify.payload
+                    c.execute("unlisten received_message;")
+                    conn.commit()
                     posted.set()
                     posted.clear()
         finally:
-            session.rollback()
+            conn1.close()
 
 class Message(pyphilo.Base):
     message = sa.Column(sa.String(200))
